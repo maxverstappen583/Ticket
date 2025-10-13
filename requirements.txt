@@ -1,3 +1,4 @@
 py-cord==2.6.1
 python-dotenv
 aiofiles
+flask
