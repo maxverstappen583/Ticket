@@ -1,33 +1,28 @@
+# --- Fix for Render (audioop issue) ---
+import os
+os.environ["DISCORD_DISABLE_VOICE"] = "1"
+# -------------------------------------
+
 """
-Maxy Does Tickets - Pycord Ticket Bot (single file)
-
-Features:
-- Slash commands (admin-only) to configure ticket panel:
-  /setup_ticket, /set_ticket_title, /set_ticket_desc, /set_ticket_image,
-  /set_ticket_buttons, /set_ticket_category, /set_close_text, /set_notify_role,
-  /set_log_channel, /resend_ticket_panel, /close_ticket
-- Button panel with customizable button labels
-- Creates private ticket channel per user (1 ticket per user limit)
-- Notifies configured role on ticket creation
-- Ticket contains a Close Ticket button (only admins may press it)
-- When closed: sends "Deleting the ticket in a few seconds...", waits, generates transcript,
-  sends transcript to configured log channel and DMs the ticket author, then deletes channel
-- All persistent settings saved in ticket_config.json
-- Uses .env (DISCORD_TOKEN) for token
-- Ticket embeds include "Made by Max ❤️"
-
+Button panel with customizable button labels
+Creates private ticket channel per user (1 ticket per user)
+Notifies configured role on ticket creation
+Ticket contains a Close Ticket button (only admins can close)
+When closed: sends "Deleting the ticket in a few seconds"
+Sends transcript to configured log channel and ticket issuer
+All persistent settings saved in ticket_config.json
+Uses .env (DISCORD_TOKEN) for token
+Ticket embeds include "Made by Max ❤️"
 Usage:
 - Fill .env with DISCORD_TOKEN=your_token_here
 - python main.py
 """
 
-import os
 import json
 import io
 import asyncio
 import datetime
 from typing import List, Optional
-
 from dotenv import load_dotenv
 load_dotenv()
 
