@@ -29,6 +29,10 @@ load_dotenv()
 import discord
 from discord import Embed, File, Object
 from discord.ui import View, Button
+# --- Discord Intents Setup ---
+intents = discord.Intents.all()  # enables all privileged intents (members, presence, message content)
+bot = discord.Bot(intents=intents)  # or commands.Bot if you’re using command_prefix
+# ------------------------------
 
 # ---------- Config / Persistence ----------
 TOKEN = os.getenv("DISCORD_TOKEN")
