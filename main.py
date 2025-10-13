@@ -78,8 +78,9 @@ def save_config(cfg: dict):
 
 # ---------- Bot Setup (Pycord) ----------
 intents = discord.Intents.default()
-intents.message_content = True   # needed for transcript
-intents.members = True
+intents.message_content = True   # Needed for transcripts and normal message reads
+intents.members = True           # Needed for member data
+intents.presences = True         # <-- This line was missing
 intents.guilds = True
 
 bot = discord.Bot(intents=intents)
