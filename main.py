@@ -555,11 +555,17 @@ async def close_ticket(ctx: discord.ApplicationContext):
 # ---------- Bot Events ----------
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    # commands are registered automatically by py-cord; show help in console
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print("Bot ready. Use /setup_ticket to post the panel.")
 
 
 # ---------- Run ----------
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    import asyncio
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        raise ValueError("❌ No DISCORD_TOKEN found in .env file.")
+    try:
+        asyncio.run(bot.start(TOKEN))
+    except KeyboardInterrupt:
+        print("🛑 Bot stopped manually.")
