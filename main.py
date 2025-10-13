@@ -1,7 +1,26 @@
-# --- Fix for Render (audioop issue) ---
+# --- Keep-Alive Web Server (for Render Web Service) ---
+from threading import Thread
+from flask import Flask
 import os
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "✅ Maxy Ticket Bot is running."
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+Thread(target=run_web).start()
+# ------------------------------------------------------
+
+
+# --- Fix for Render (audioop issue) ---
 os.environ["DISCORD_DISABLE_VOICE"] = "1"
 # -------------------------------------
+
 
 """
 Button panel with customizable button labels
@@ -29,11 +48,24 @@ load_dotenv()
 import discord
 from discord import Embed, File, Object
 from discord.ui import View, Button
+
+
 # --- Discord Intents Setup ---
-intents = discord.Intents.all()  # enables all privileged intents (members, presence, message content)
-bot = discord.Bot(intents=intents)  # or commands.Bot if you’re using command_prefix
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.guilds = True
+
+bot = discord.Bot(intents=intents)
 # ------------------------------
 
+
+# ✅ Confirm bot startup
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print("Bot is online and ready.")
+    
 # ---------- Config / Persistence ----------
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
