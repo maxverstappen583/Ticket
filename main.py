@@ -76,14 +76,21 @@ def save_config(cfg: dict):
         json.dump(cfg, f, indent=2)
 
 
-# ---------- Bot Setup (Pycord) ----------
+# # ---------- Bot Setup (Pycord) with Safe Fallback ----------
 intents = discord.Intents.default()
-intents.message_content = True   # Needed for transcripts and normal message reads
-intents.members = True           # Needed for member data
-intents.presences = True         # <-- This line was missing
+intents.message_content = True
+intents.members = True
+intents.presences = True
 intents.guilds = True
 
-bot = discord.Bot(intents=intents)
+try:
+    bot = discord.Bot(intents=intents)
+except discord.errors.PrivilegedIntentsRequired:
+    # fallback (disable privileged ones if Discord rejects)
+    intents.members = False
+    intents.presences = False
+    bot = discord.Bot(intents=intents)
+    print("⚠️ Privileged intents not enabled in Developer Portal — running in limited mode.")
 
 
 # ---------- Utility ----------
