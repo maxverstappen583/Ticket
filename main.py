@@ -1,11 +1,10 @@
-# main.py - Maxy Does Tickets (full, Render-ready, with button-based /ticket setup)
-# -------------------------------------------------------------------------------
-# - Keep-alive Flask web server for Render web service
+# main.py - Maxy Does Tickets (Render-ready, fixed imports + full features)
+# -----------------------------------------------------------------------
+# - Keep-alive Flask web server for Render Web Service
 # - audioop disable for Pycord on Python 3.13+
-# - Full ticket system with persistent JSON config
-# - Button-driven /ticket setup UI with modals and preview/send
-# - /settings command to view current settings
-# -------------------------------------------------------------------------------
+# - Uses ui.TextInput to avoid TextInput import issues on some environments
+# - Full ticket system with button-driven setup UI and /settings
+# -----------------------------------------------------------------------
 
 # --- Keep-Alive Web Server (for Render Web Service) ---
 from threading import Thread
@@ -40,10 +39,14 @@ from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-# Discord / Pycord imports
+# Discord / Pycord imports (use ui alias to be safe)
 import discord
 from discord import Embed, File
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import View, Button, Modal
+from discord import ui  # use ui.TextInput for compatibility
+
+# Print version for debugging
+print("✅ Pycord / discord version:", getattr(discord, "__version__", "unknown"))
 
 # ---------- Config / Persistence ----------
 CONFIG_FILE = "ticket_config.json"
@@ -81,7 +84,7 @@ def save_config(cfg: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
-# keep a module-level config
+# load once into memory (we reload inside handlers too where needed)
 config = load_config()
 
 # ---------- Intents and Bot creation (with safe fallback) ----------
@@ -296,7 +299,6 @@ async def handle_close(interaction: discord.Interaction):
 
     transcript_text = "\n".join(lines) if lines else "No messages found."
     transcript_bytes = transcript_text.encode("utf-8")
-    transcript_file = File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
 
     # extract ticket owner id from topic if present
     ticket_owner_id = None
@@ -408,259 +410,181 @@ async def auto_close_checker():
                             print(f"Auto-close check error in {channel.name}: {e}")
         await asyncio.sleep(300)  # check every 5 minutes
 
-# ---------- Modal classes for config inputs ----------
+# ---------- Modal classes for config inputs (use ui.TextInput for compatibility) ----------
 class SimpleModal(Modal):
     def __init__(self, title: str, label: str, placeholder: str = "", style: discord.TextStyle = discord.TextStyle.short, custom_id: str = "simple_modal"):
         super().__init__(title=title, custom_id=custom_id)
-        self.input = TextInput(label=label, placeholder=placeholder, style=style, required=True)
+        self.input = ui.TextInput(label=label, placeholder=placeholder, style=style, required=True)
         self.add_item(self.input)
 
     async def callback(self, interaction: discord.Interaction):
-        # will be overridden by subclass usage via attributes
         await interaction.response.send_message("Saved.", ephemeral=True)
 
-# We will create small subclasses to handle different inputs and save config
+# Subclasses:
 class TitleModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Title", label="Panel title", placeholder="Maxy Does Tickets – Support System", custom_id="title_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
-        cfg = load_config()
-        cfg["title"] = self.input.value
-        save_config(cfg)
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        cfg = load_config(); cfg["title"] = self.input.value; save_config(cfg)
         await interaction.response.send_message("Panel title updated.", ephemeral=True)
 
 class DescModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Description", label="Panel description", placeholder="Need help? Open a ticket...", style=discord.TextStyle.paragraph, custom_id="desc_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
-        cfg = load_config()
-        cfg["description"] = self.input.value
-        save_config(cfg)
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        cfg = load_config(); cfg["description"] = self.input.value; save_config(cfg)
         await interaction.response.send_message("Panel description updated.", ephemeral=True)
 
 class ImageModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Image URL", label="Image URL", placeholder="https://example.com/image.png", custom_id="image_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         url = self.input.value.strip()
         if not (url.startswith("http://") or url.startswith("https://")):
             await interaction.response.send_message("Provide a valid http/https URL.", ephemeral=True); return
-        cfg = load_config()
-        cfg["image"] = url
-        save_config(cfg)
+        cfg = load_config(); cfg["image"] = url; save_config(cfg)
         await interaction.response.send_message("Panel image updated.", ephemeral=True)
 
 class ButtonsModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Buttons", label="Buttons (comma separated)", placeholder="Hosting, Issues, Suspension, Other", custom_id="buttons_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         labels = [b.strip() for b in self.input.value.split(",") if b.strip()]
         if not labels:
             await interaction.response.send_message("Provide at least one button label.", ephemeral=True); return
-        cfg = load_config()
-        cfg["buttons"] = labels
-        save_config(cfg)
+        cfg = load_config(); cfg["buttons"] = labels; save_config(cfg)
         await interaction.response.send_message(f"Panel buttons updated: {', '.join(labels)}", ephemeral=True)
 
 class CategoryModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Ticket Category ID", label="Category ID", placeholder="123456789012345678", custom_id="category_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
-        try:
-            cid = int(self.input.value.strip())
-        except Exception:
-            await interaction.response.send_message("Category ID must be numeric.", ephemeral=True); return
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        try: cid = int(self.input.value.strip())
+        except Exception: await interaction.response.send_message("Category ID must be numeric.", ephemeral=True); return
         cat = interaction.guild.get_channel(cid)
-        if not cat or not isinstance(cat, discord.CategoryChannel):
-            await interaction.response.send_message("Category not found in this server.", ephemeral=True); return
-        cfg = load_config()
-        cfg["category_id"] = cid
-        save_config(cfg)
+        if not cat or not isinstance(cat, discord.CategoryChannel): await interaction.response.send_message("Category not found.", ephemeral=True); return
+        cfg = load_config(); cfg["category_id"] = cid; save_config(cfg)
         await interaction.response.send_message(f"Ticket category set to: {cat.name}", ephemeral=True)
 
 class LogChannelModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Log Channel ID", label="Channel ID (0 to disable)", placeholder="123456789012345678 or 0", custom_id="log_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         v = self.input.value.strip()
         if v == "0":
-            cfg = load_config()
-            cfg["log_channel_id"] = None
-            save_config(cfg)
-            await interaction.response.send_message("Log channel disabled.", ephemeral=True)
-            return
-        try:
-            cid = int(v)
-        except Exception:
-            await interaction.response.send_message("Channel ID must be numeric or 0.", ephemeral=True); return
+            cfg = load_config(); cfg["log_channel_id"] = None; save_config(cfg); await interaction.response.send_message("Log channel disabled.", ephemeral=True); return
+        try: cid = int(v)
+        except Exception: await interaction.response.send_message("Channel ID must be numeric or 0.", ephemeral=True); return
         ch = interaction.guild.get_channel(cid)
-        if not ch or not isinstance(ch, discord.TextChannel):
-            await interaction.response.send_message("Text channel not found in this server.", ephemeral=True); return
-        cfg = load_config()
-        cfg["log_channel_id"] = cid
-        save_config(cfg)
-        await interaction.response.send_message(f"Log channel set to: {ch.mention}", ephemeral=True)
+        if not ch or not isinstance(ch, discord.TextChannel): await interaction.response.send_message("Text channel not found in this server.", ephemeral=True); return
+        cfg = load_config(); cfg["log_channel_id"] = cid; save_config(cfg); await interaction.response.send_message(f"Log channel set to: {ch.mention}", ephemeral=True)
 
 class NotifyRoleModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Notify Role", label="Role (mention or ID) or 0 to disable", placeholder="@Support or 0", custom_id="notify_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         v = self.input.value.strip()
         if v == "0":
-            cfg = load_config()
-            cfg["notify_role_id"] = None
-            save_config(cfg)
-            await interaction.response.send_message("Notify role disabled.", ephemeral=True)
-            return
+            cfg = load_config(); cfg["notify_role_id"] = None; save_config(cfg); await interaction.response.send_message("Notify role disabled.", ephemeral=True); return
         role_id = None
-        if v.isdigit():
-            role_id = int(v)
+        if v.isdigit(): role_id = int(v)
         else:
             if v.startswith("<@&") and v.endswith(">"):
-                try:
-                    role_id = int(v[3:-1])
-                except Exception:
-                    role_id = None
-        if role_id is None:
-            await interaction.response.send_message("Could not parse role. Provide mention or ID or 0 to disable.", ephemeral=True); return
+                try: role_id = int(v[3:-1])
+                except Exception: role_id = None
+        if role_id is None: await interaction.response.send_message("Could not parse role. Provide mention or ID or 0 to disable.", ephemeral=True); return
         r = interaction.guild.get_role(role_id)
-        if not r:
-            await interaction.response.send_message("Role not found.", ephemeral=True); return
-        cfg = load_config()
-        cfg["notify_role_id"] = role_id
-        save_config(cfg)
-        await interaction.response.send_message(f"Notify role set to: {r.name}", ephemeral=True)
+        if not r: await interaction.response.send_message("Role not found.", ephemeral=True); return
+        cfg = load_config(); cfg["notify_role_id"] = role_id; save_config(cfg); await interaction.response.send_message(f"Notify role set to: {r.name}", ephemeral=True)
 
 class CreationTextModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Text Sent When Ticket Is Made", label="Text shown when ticket created", style=discord.TextStyle.paragraph, custom_id="creation_text_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
-        cfg = load_config()
-        cfg["creation_text"] = self.input.value
-        save_config(cfg)
-        await interaction.response.send_message("Text updated.", ephemeral=True)
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        cfg = load_config(); cfg["creation_text"] = self.input.value; save_config(cfg); await interaction.response.send_message("Text updated.", ephemeral=True)
 
 class AutocloseModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Autoclose Hours", label="Hours (0 to disable)", placeholder="3", custom_id="autoclose_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("Admins only.", ephemeral=True); return
-        try:
-            hours = int(self.input.value.strip())
-        except Exception:
-            await interaction.response.send_message("Please provide a number (0 to disable).", ephemeral=True); return
-        if hours < 0:
-            await interaction.response.send_message("Hours cannot be negative.", ephemeral=True); return
-        cfg = load_config()
-        cfg["autoclose_hours"] = hours
-        save_config(cfg)
-        if hours == 0:
-            await interaction.response.send_message("Auto-close disabled.", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"Auto-close set to {hours} hours.", ephemeral=True)
+        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        try: hours = int(self.input.value.strip())
+        except Exception: await interaction.response.send_message("Please provide a number (0 to disable).", ephemeral=True); return
+        if hours < 0: await interaction.response.send_message("Hours cannot be negative.", ephemeral=True); return
+        cfg = load_config(); cfg["autoclose_hours"] = hours; save_config(cfg)
+        if hours == 0: await interaction.response.send_message("Auto-close disabled.", ephemeral=True)
+        else: await interaction.response.send_message(f"Auto-close set to {hours} hours.", ephemeral=True)
 
-# ---------- Ticket Setup view (buttons that open modals) ----------
+# ---------- Ticket Setup view (buttons) ----------
 class TicketSetupView(View):
     def __init__(self, timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
-        # Each button triggers either a modal or an action
-        self.add_item(Button(label="Set Panel Title", style=discord.ButtonStyle.primary, custom_id="btn_title"))
-        self.add_item(Button(label="Set Panel Description", style=discord.ButtonStyle.primary, custom_id="btn_desc"))
-        self.add_item(Button(label="Set Panel Image", style=discord.ButtonStyle.primary, custom_id="btn_image"))
-        self.add_item(Button(label="Set Panel Buttons", style=discord.ButtonStyle.primary, custom_id="btn_buttons"))
-        self.add_item(Button(label="Set Ticket Category", style=discord.ButtonStyle.secondary, custom_id="btn_category"))
-        self.add_item(Button(label="Set Log Channel", style=discord.ButtonStyle.secondary, custom_id="btn_log"))
-        self.add_item(Button(label="Set Notify Role", style=discord.ButtonStyle.secondary, custom_id="btn_notify"))
-        self.add_item(Button(label="Text Sent When Ticket Is Made", style=discord.ButtonStyle.secondary, custom_id="btn_creation_text"))
-        self.add_item(Button(label="Set Autoclose Hours", style=discord.ButtonStyle.danger, custom_id="btn_autoclose"))
-        self.add_item(Button(label="Preview Panel", style=discord.ButtonStyle.success, custom_id="btn_preview"))
-        self.add_item(Button(label="Send Panel Here", style=discord.ButtonStyle.success, custom_id="btn_send_panel"))
+        # Add buttons with custom_ids
+        btns = [
+            ("Set Panel Title", "btn_title", discord.ButtonStyle.primary),
+            ("Set Panel Description", "btn_desc", discord.ButtonStyle.primary),
+            ("Set Panel Image", "btn_image", discord.ButtonStyle.primary),
+            ("Set Panel Buttons", "btn_buttons", discord.ButtonStyle.primary),
+            ("Set Ticket Category", "btn_category", discord.ButtonStyle.secondary),
+            ("Set Log Channel", "btn_log", discord.ButtonStyle.secondary),
+            ("Set Notify Role", "btn_notify", discord.ButtonStyle.secondary),
+            ("Text Sent When Ticket Is Made", "btn_creation_text", discord.ButtonStyle.secondary),
+            ("Set Autoclose Hours", "btn_autoclose", discord.ButtonStyle.danger),
+            ("Preview Panel", "btn_preview", discord.ButtonStyle.success),
+            ("Send Panel Here", "btn_send_panel", discord.ButtonStyle.success)
+        ]
+        for label, cid, style in btns:
+            b = Button(label=label, custom_id=cid, style=style)
+            self.add_item(b)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # only allow admins to use this view
         if not is_admin(interaction.user):
             await interaction.response.send_message("Admins only.", ephemeral=True)
             return False
         return True
 
-    # We'll handle button callbacks in a centralized handler
-    @discord.ui.button(label="dummy", style=discord.ButtonStyle.secondary, custom_id="dummy_btn", visible=False)
-    async def dummy(self, button, interaction):
-        pass
-
+# Centralized handling of TicketSetupView buttons
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    # centralized handling for our TicketSetupView buttons (since custom Button classes would be long)
+    # handle component interactions for our setup buttons
     try:
         if interaction.type == discord.InteractionType.component and interaction.data and "custom_id" in interaction.data:
             cid = interaction.data["custom_id"]
-            # Only handle our setup buttons
             if cid.startswith("btn_"):
                 if not is_admin(interaction.user):
                     await interaction.response.send_message("Admins only.", ephemeral=True); return
-                # map to modal/action
-                if cid == "btn_title":
-                    await interaction.response.send_modal(TitleModal())
-                    return
-                if cid == "btn_desc":
-                    await interaction.response.send_modal(DescModal())
-                    return
-                if cid == "btn_image":
-                    await interaction.response.send_modal(ImageModal())
-                    return
-                if cid == "btn_buttons":
-                    await interaction.response.send_modal(ButtonsModal())
-                    return
-                if cid == "btn_category":
-                    await interaction.response.send_modal(CategoryModal())
-                    return
-                if cid == "btn_log":
-                    await interaction.response.send_modal(LogChannelModal())
-                    return
-                if cid == "btn_notify":
-                    await interaction.response.send_modal(NotifyRoleModal())
-                    return
-                if cid == "btn_creation_text":
-                    await interaction.response.send_modal(CreationTextModal())
-                    return
-                if cid == "btn_autoclose":
-                    await interaction.response.send_modal(AutocloseModal())
-                    return
+                # map to modal/actions
+                if cid == "btn_title": await interaction.response.send_modal(TitleModal()); return
+                if cid == "btn_desc": await interaction.response.send_modal(DescModal()); return
+                if cid == "btn_image": await interaction.response.send_modal(ImageModal()); return
+                if cid == "btn_buttons": await interaction.response.send_modal(ButtonsModal()); return
+                if cid == "btn_category": await interaction.response.send_modal(CategoryModal()); return
+                if cid == "btn_log": await interaction.response.send_modal(LogChannelModal()); return
+                if cid == "btn_notify": await interaction.response.send_modal(NotifyRoleModal()); return
+                if cid == "btn_creation_text": await interaction.response.send_modal(CreationTextModal()); return
+                if cid == "btn_autoclose": await interaction.response.send_modal(AutocloseModal()); return
                 if cid == "btn_preview":
                     cfg = load_config()
                     embed = Embed(title=cfg.get("title"), description=f"{cfg.get('description')}\n\nMade by Max ❤️", color=discord.Color.dark_gray())
                     if cfg.get("image"):
-                        try:
-                            embed.set_thumbnail(url=cfg.get("image"))
-                        except Exception:
-                            pass
+                        try: embed.set_thumbnail(url=cfg.get("image"))
+                        except Exception: pass
                     await interaction.response.send_message("Here is the current panel preview:", embed=embed, ephemeral=True)
                     return
                 if cid == "btn_send_panel":
                     cfg = load_config()
                     embed = Embed(title=cfg.get("title"), description=f"{cfg.get('description')}\n\nMade by Max ❤️", color=discord.Color.dark_gray())
                     if cfg.get("image"):
-                        try:
-                            embed.set_thumbnail(url=cfg.get("image"))
-                        except Exception:
-                            pass
+                        try: embed.set_thumbnail(url=cfg.get("image"))
+                        except Exception: pass
                     view = TicketPanelView(buttons=cfg.get("buttons", []))
                     try:
                         sent = await interaction.channel.send(embed=embed, view=view)
@@ -672,10 +596,10 @@ async def on_interaction(interaction: discord.Interaction):
                         await interaction.response.send_message(f"Failed to send panel: {e}", ephemeral=True)
                     return
     except Exception:
-        # not our component, ignore and allow others to process
+        # If not our component or failure, ignore and allow other handlers
         pass
-    # let other on_interaction handlers (Pycord) run
-    await bot._run_component_listeners(interaction)  # internal: ensure other components still work
+    # For other interactions, let Pycord handle as usual (no blocking)
+    # Note: returning without calling bot._run_component_listeners is fine in many setups.
 
 # ---------- Slash command: /ticket setup (shows button menu) ----------
 ticket_group = bot.create_group("ticket", "Ticket related commands")
@@ -695,7 +619,10 @@ async def settings(ctx: discord.ApplicationContext):
     cfg = load_config()
     embed = Embed(title="Ticket Config", color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Title", value=cfg.get("title") or "—", inline=False)
-    embed.add_field(name="Description", value=(cfg.get("description")[:1000] + "..." if cfg.get("description") and len(cfg.get("description"))>1000 else cfg.get("description") or "—"), inline=False)
+    desc = cfg.get("description") or "—"
+    if len(desc) > 1000:
+        desc = desc[:1000] + "..."
+    embed.add_field(name="Description", value=desc, inline=False)
     embed.add_field(name="Image", value=cfg.get("image") or "—", inline=False)
     embed.add_field(name="Buttons", value=", ".join(cfg.get("buttons", [])) or "—", inline=False)
     ch = "None"
@@ -717,7 +644,7 @@ async def settings(ctx: discord.ApplicationContext):
     embed.add_field(name="Auto-close (hours)", value=str(cfg.get("autoclose_hours", 0)), inline=False)
     await ctx.respond(embed=embed, ephemeral=True)
 
-# ---------- Existing simple slash commands (legacy support) ----------
+# ---------- Legacy convenience commands (still available) ----------
 @bot.slash_command(name="setup_ticket", description="(legacy) send ticket panel to channel (admins only).")
 async def setup_ticket(ctx: discord.ApplicationContext):
     if not is_admin(ctx.author):
@@ -725,10 +652,8 @@ async def setup_ticket(ctx: discord.ApplicationContext):
     cfg = load_config()
     embed = Embed(title=cfg.get("title"), description=f"{cfg.get('description')}\n\nMade by Max ❤️", color=discord.Color.dark_gray())
     if cfg.get("image"):
-        try:
-            embed.set_thumbnail(url=cfg.get("image"))
-        except Exception:
-            pass
+        try: embed.set_thumbnail(url=cfg.get("image"))
+        except Exception: pass
     view = TicketPanelView(buttons=cfg.get("buttons", []))
     try:
         sent = await ctx.channel.send(embed=embed, view=view)
@@ -739,108 +664,78 @@ async def setup_ticket(ctx: discord.ApplicationContext):
     except Exception as e:
         await ctx.respond(f"Failed to send panel: {e}", ephemeral=True)
 
-# ---------- Reuse/compat admin commands (optional but handy) ----------
+# Convenience setters (unchanged; kept for direct command usage)
 @bot.slash_command(name="set_ticket_title", description="Set the ticket embed title (admins only).")
 async def set_ticket_title(ctx: discord.ApplicationContext, title: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["title"] = title; save_config(cfg)
-    await ctx.respond("Ticket title updated.", ephemeral=True)
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    cfg = load_config(); cfg["title"] = title; save_config(cfg); await ctx.respond("Ticket title updated.", ephemeral=True)
 
 @bot.slash_command(name="set_ticket_desc", description="Set the ticket embed description (admins only).")
 async def set_ticket_desc(ctx: discord.ApplicationContext, description: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["description"] = description; save_config(cfg)
-    await ctx.respond("Ticket description updated.", ephemeral=True)
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    cfg = load_config(); cfg["description"] = description; save_config(cfg); await ctx.respond("Ticket description updated.", ephemeral=True)
 
 @bot.slash_command(name="set_ticket_image", description="Set the ticket embed image URL (admins only).")
 async def set_ticket_image(ctx: discord.ApplicationContext, url: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    if not (url.startswith("http://") or url.startswith("https://")):
-        await ctx.respond("Provide a valid http/https URL.", ephemeral=True); return
-    cfg = load_config(); cfg["image"] = url; save_config(cfg)
-    await ctx.respond("Ticket image updated.", ephemeral=True)
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    if not (url.startswith("http://") or url.startswith("https://")): await ctx.respond("Provide a valid http/https URL.", ephemeral=True); return
+    cfg = load_config(); cfg["image"] = url; save_config(cfg); await ctx.respond("Ticket image updated.", ephemeral=True)
 
 @bot.slash_command(name="set_ticket_buttons", description="Set the ticket button labels (comma separated) (admins only).")
 async def set_ticket_buttons(ctx: discord.ApplicationContext, buttons: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
     labels = [b.strip() for b in buttons.split(",") if b.strip()]
-    if not labels:
-        await ctx.respond("Provide at least one label.", ephemeral=True); return
-    cfg = load_config(); cfg["buttons"] = labels; save_config(cfg)
-    await ctx.respond(f"Ticket buttons updated: {', '.join(labels)}", ephemeral=True)
+    if not labels: await ctx.respond("Provide at least one label.", ephemeral=True); return
+    cfg = load_config(); cfg["buttons"] = labels; save_config(cfg); await ctx.respond(f"Ticket buttons updated: {', '.join(labels)}", ephemeral=True)
 
 @bot.slash_command(name="set_close_text", description="(legacy) Set the text sent when ticket is made (admins only).")
 async def set_close_text(ctx: discord.ApplicationContext, text: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["creation_text"] = text; save_config(cfg)
-    await ctx.respond("Text updated.", ephemeral=True)
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    cfg = load_config(); cfg["creation_text"] = text; save_config(cfg); await ctx.respond("Text updated.", ephemeral=True)
 
 @bot.slash_command(name="set_notify_role", description="Set a role to ping when a ticket is created (mention or ID). Use 0 to disable. (admins only)")
 async def set_notify_role(ctx: discord.ApplicationContext, role: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
     cfg = load_config()
-    if role.strip() == "0":
-        cfg["notify_role_id"] = None; save_config(cfg); await ctx.respond("Notify role disabled.", ephemeral=True); return
+    if role.strip() == "0": cfg["notify_role_id"] = None; save_config(cfg); await ctx.respond("Notify role disabled.", ephemeral=True); return
     role_id = None
-    if role.isdigit():
-        role_id = int(role)
+    if role.isdigit(): role_id = int(role)
     else:
         if role.startswith("<@&") and role.endswith(">"):
             try: role_id = int(role[3:-1])
             except Exception: role_id = None
-    if role_id is None:
-        await ctx.respond("Could not parse role. Provide mention or ID or 0 to disable.", ephemeral=True); return
+    if role_id is None: await ctx.respond("Could not parse role. Provide mention or ID or 0 to disable.", ephemeral=True); return
     r = ctx.guild.get_role(role_id)
-    if not r:
-        await ctx.respond("Role not found.", ephemeral=True); return
+    if not r: await ctx.respond("Role not found.", ephemeral=True); return
     cfg["notify_role_id"] = role_id; save_config(cfg); await ctx.respond(f"Notify role set to: {r.name}", ephemeral=True)
 
 @bot.slash_command(name="set_log_channel", description="Set the log channel ID where ticket logs/transcripts will be sent. Use 0 to disable. (admins only)")
 async def set_log_channel(ctx: discord.ApplicationContext, channel_id: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
     cfg = load_config()
-    if channel_id.strip() == "0":
-        cfg["log_channel_id"] = None; save_config(cfg); await ctx.respond("Log channel disabled.", ephemeral=True); return
-    try:
-        cid = int(channel_id)
-    except ValueError:
-        await ctx.respond("Channel ID must be numeric.", ephemeral=True); return
+    if channel_id.strip() == "0": cfg["log_channel_id"] = None; save_config(cfg); await ctx.respond("Log channel disabled.", ephemeral=True); return
+    try: cid = int(channel_id)
+    except Exception: await ctx.respond("Channel ID must be numeric.", ephemeral=True); return
     ch = ctx.guild.get_channel(cid)
-    if not ch or not isinstance(ch, discord.TextChannel):
-        await ctx.respond("Text channel not found in this server.", ephemeral=True); return
+    if not ch or not isinstance(ch, discord.TextChannel): await ctx.respond("Text channel not found in this server.", ephemeral=True); return
     cfg["log_channel_id"] = cid; save_config(cfg); await ctx.respond(f"Log channel set to: {ch.mention}", ephemeral=True)
 
 @bot.slash_command(name="set_ticket_category", description="Set the category ID where tickets are created (admins only).")
 async def set_ticket_category(ctx: discord.ApplicationContext, category_id: str):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    try:
-        cid = int(category_id)
-    except ValueError:
-        await ctx.respond("Category ID must be numeric.", ephemeral=True); return
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    try: cid = int(category_id)
+    except Exception: await ctx.respond("Category ID must be numeric.", ephemeral=True); return
     cat = ctx.guild.get_channel(cid)
-    if not cat or not isinstance(cat, discord.CategoryChannel):
-        await ctx.respond("Category not found.", ephemeral=True); return
+    if not cat or not isinstance(cat, discord.CategoryChannel): await ctx.respond("Category not found.", ephemeral=True); return
     cfg = load_config(); cfg["category_id"] = cid; save_config(cfg); await ctx.respond(f"Ticket category set to: {cat.name}", ephemeral=True)
 
 @bot.slash_command(name="set_autoclose", description="Set hours before inactive tickets auto-close (0 to disable). Admins only.")
 async def set_autoclose(ctx: discord.ApplicationContext, hours: int):
-    if not is_admin(ctx.author):
-        await ctx.respond("Admins only.", ephemeral=True); return
-    if hours < 0:
-        await ctx.respond("Hours cannot be negative.", ephemeral=True); return
+    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
+    if hours < 0: await ctx.respond("Hours cannot be negative.", ephemeral=True); return
     cfg = load_config(); cfg["autoclose_hours"] = hours; save_config(cfg)
-    if hours == 0:
-        await ctx.respond("Auto-close disabled.", ephemeral=True)
-    else:
-        await ctx.respond(f"Tickets will auto-close after {hours} hours of inactivity.", ephemeral=True)
+    if hours == 0: await ctx.respond("Auto-close disabled.", ephemeral=True)
+    else: await ctx.respond(f"Tickets will auto-close after {hours} hours of inactivity.", ephemeral=True)
 
 # ---------- Bot Events ----------
 @bot.event
