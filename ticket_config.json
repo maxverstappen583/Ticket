@@ -1,13 +1,13 @@
 {
     "title": "Maxy Does Tickets – Support System",
     "description": "Need help? Open a ticket by clicking a button below!\nOur staff will assist you as soon as possible.",
-    "image": None,
-    "buttons": ["Hosting", "Issues", "Suspension", "Other"],
-    "category_id": None,
+    "image": https://i.postimg.cc/W3mjY4k8/IMG-9526.png,
+    "buttons": ["Performance Issue", "Report User", "Bot Setup", "Navigation Help", "Appeal", "System Outage", "Critical Bug"],
+    "category_id": 1413149166426918975,
     "panel_message_id": None,
     "panel_channel_id": None,
     "close_text": "please wait until one of our staffs assist u.",
-    "notify_role_id": None,
-    "log_channel_id": None,
-    "autoclose_hours": 0  # 0 = disabled
+    "notify_role_id": <@1427258932212011008>,
+    "log_channel_id": <#1427258478317015171>,
+    "autoclose_hours": 24  # 0 = disabled
 }
