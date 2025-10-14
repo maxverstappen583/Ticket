@@ -1,12 +1,13 @@
 {
-  "title": "Maxy  – Support System",
-  "description": "Need help? Open a ticket by clicking the button below!\nOur staff will assist you as soon as possible.",
-  "image": null,
-  "buttons": ["Hosting", "Issues", "bot setup", "Other"],
-  "category_id": null,
-  "panel_message_id": null,
-  "panel_channel_id": null,
-  "close_text": "please wait until one of our staffs assist u.",
-  "notify_role_id": null,
-  "log_channel_id": null
+    "title": "Maxy Does Tickets – Support System",
+    "description": "Need help? Open a ticket by clicking a button below!\nOur staff will assist you as soon as possible.",
+    "image": None,
+    "buttons": ["Hosting", "Issues", "Suspension", "Other"],
+    "category_id": None,
+    "panel_message_id": None,
+    "panel_channel_id": None,
+    "close_text": "please wait until one of our staffs assist u.",
+    "notify_role_id": None,
+    "log_channel_id": None,
+    "autoclose_hours": 0  # 0 = disabled
 }
