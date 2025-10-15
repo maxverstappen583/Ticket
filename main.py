@@ -1,12 +1,12 @@
-# main.py - Maxy Does Tickets (Render-ready, fixed imports + full features)
-# -----------------------------------------------------------------------
-# - Keep-alive Flask web server for Render Web Service
+# main.py - Maxy Does Tickets (Render-ready, fixed)
+# ------------------------------------------------
+# - Flask keep-alive for Render Web Service
 # - audioop disable for Pycord on Python 3.13+
-# - Uses ui.TextInput to avoid TextInput import issues on some environments
-# - Full ticket system with button-driven setup UI and /settings
-# -----------------------------------------------------------------------
+# - Uses ui.TextInput to avoid import issues
+# - Full ticket system: button-driven /ticket setup, /settings, autoclose, transcripts
+# ------------------------------------------------
 
-# --- Keep-Alive Web Server (for Render Web Service) ---
+# ------------------- Keep-alive (Flask) -------------------
 from threading import Thread
 from flask import Flask
 import os
@@ -19,15 +19,15 @@ def home():
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    # disable Flask's reloader in hosting environments
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 Thread(target=run_web).start()
-# ------------------------------------------------------
+# ---------------------------------------------------------
 
-# --- Fix for Render (audioop issue) ---
-# Must be set BEFORE importing discord so Pycord won't attempt voice imports
+# ------------------- audioop fix (must run BEFORE discord import) -------------------
 os.environ["DISCORD_DISABLE_VOICE"] = "1"
-# -------------------------------------
+# -----------------------------------------------------------------------------------
 
 # Standard imports
 import json
@@ -37,18 +37,18 @@ import datetime
 from datetime import timedelta
 from typing import List, Optional
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()  # loads local .env for local testing; Render uses env vars set on dashboard
 
-# Discord / Pycord imports (use ui alias to be safe)
+# Discord / Pycord imports
 import discord
 from discord import Embed, File
 from discord.ui import View, Button, Modal
-from discord import ui  # use ui.TextInput for compatibility
+from discord import ui  # use ui.TextInput for compatibility in some envs
 
-# Print version for debugging
+# Debug: show the library version in logs
 print("✅ Pycord / discord version:", getattr(discord, "__version__", "unknown"))
 
-# ---------- Config / Persistence ----------
+# ------------------- Config / Persistence -------------------
 CONFIG_FILE = "ticket_config.json"
 DEFAULT_CONFIG = {
     "title": "Maxy Does Tickets – Support System",
@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "category_id": None,
     "panel_message_id": None,
     "panel_channel_id": None,
-    "creation_text": "please wait until one of our staffs assist u.",
+    "creation_text": "please wait until one of our staffs assist u.",  # renamed
     "notify_role_id": None,
     "log_channel_id": None,
     "autoclose_hours": 0  # 0 = disabled
@@ -74,7 +74,6 @@ def load_config() -> dict:
             cfg = json.load(f)
         except Exception:
             cfg = DEFAULT_CONFIG.copy()
-    # ensure all defaults present
     for k, v in DEFAULT_CONFIG.items():
         if k not in cfg:
             cfg[k] = v
@@ -84,10 +83,10 @@ def save_config(cfg: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
-# load once into memory (we reload inside handlers too where needed)
+# load config into memory (handlers call load_config() again to be safe)
 config = load_config()
 
-# ---------- Intents and Bot creation (with safe fallback) ----------
+# ------------------- Intents & Bot -------------------
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -97,20 +96,20 @@ intents.guilds = True
 try:
     bot = discord.Bot(intents=intents)
 except discord.PrivilegedIntentsRequired:
-    # Fallback: disable privileged intents so bot can still run in limited mode
+    # fallback to limited mode if portal not configured
     intents.members = False
     intents.presences = False
     bot = discord.Bot(intents=intents)
-    print("⚠️ Privileged intents not enabled in Developer Portal — running in limited mode (members/presences disabled).")
+    print("⚠️ Privileged intents not enabled in Developer Portal — running limited mode (members/presences disabled).")
 
-# Utility: check admin
+# ------------------- Utility -------------------
 def is_admin(user: discord.Member) -> bool:
     try:
         return user.guild_permissions.administrator
     except Exception:
         return False
 
-# ---------- Views and Buttons ----------
+# ------------------- Views & Buttons -------------------
 class TicketButton(Button):
     def __init__(self, label: str, style: discord.ButtonStyle = discord.ButtonStyle.primary):
         super().__init__(label=label, style=style)
@@ -119,8 +118,8 @@ class TicketButton(Button):
         await handle_ticket_button(interaction, self.label)
 
 class TicketPanelView(View):
-    def __init__(self, buttons: List[str], timeout: Optional[float] = None):
-        super().__init__(timeout=timeout)
+    def __init__(self, buttons: List[str]):
+        super().__init__(timeout=None)
         for name in buttons:
             style = discord.ButtonStyle.primary
             nlower = name.lower()
@@ -135,26 +134,24 @@ class CloseTicketButton(Button):
         super().__init__(label=label, style=discord.ButtonStyle.danger)
 
     async def callback(self, interaction: discord.Interaction):
-        # Only admins can close via button
         if not is_admin(interaction.user):
             await interaction.response.send_message("Only administrators can close tickets.", ephemeral=True)
             return
         await handle_close(interaction)
 
 def make_close_view() -> View:
-    v = View()
+    v = View(timeout=None)
     v.add_item(CloseTicketButton())
     return v
 
-# ---------- Ticket Creation Handler ----------
+# ------------------- Ticket creation -------------------
 async def handle_ticket_button(interaction: discord.Interaction, issue_type: str):
     await interaction.response.defer(ephemeral=True)
-
     guild = interaction.guild
     member = interaction.user
     cfg = load_config()
 
-    # One-ticket-per-user: check existing channels with user's ID in topic
+    # One ticket per person check
     for ch in guild.text_channels:
         if ch.topic and str(member.id) in ch.topic:
             try:
@@ -163,8 +160,8 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
                 pass
             return
 
-    # create channel name (ensure uniqueness)
-    safe_name = member.name.lower().replace(" ", "-")
+    # channel name uniqueness
+    safe_name = member.name.lower().replace(" ", "-")[:50]
     base_name = f"ticket-{safe_name}"
     channel_name = base_name
     counter = 1
@@ -182,7 +179,6 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
     # overwrites
     overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
     overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-    # allow roles with admin perms
     for role in guild.roles:
         try:
             if role.permissions.administrator:
@@ -206,13 +202,10 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
         await interaction.followup.send(f"Failed to create ticket channel: {e}", ephemeral=True)
         return
 
-    # prepare embed and send with close button
     creation_text = cfg.get("creation_text", DEFAULT_CONFIG["creation_text"])
     embed = Embed(
         title=f"Ticket — {issue_type}",
-        description=(f"Hello {member.mention},\n\n"
-                     f"{creation_text}\n\n"
-                     f"**Issue:** {issue_type}\n\nMade by Max ❤️"),
+        description=(f"Hello {member.mention},\n\n{creation_text}\n\n**Issue:** {issue_type}\n\nMade by Max ❤️"),
         color=discord.Color.blurple(),
         timestamp=datetime.datetime.utcnow()
     )
@@ -236,7 +229,7 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
             except Exception:
                 pass
 
-    # log to log channel
+    # log creation
     log_ch = None
     if cfg.get("log_channel_id"):
         log_ch = guild.get_channel(cfg["log_channel_id"])
@@ -250,29 +243,23 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
         except Exception:
             pass
 
-    # confirm ephemeral to user
     await interaction.followup.send(f"Your ticket has been created: {created.mention}", ephemeral=True)
 
-# ---------- Ticket Close Handler ----------
+# ------------------- Close handler & transcript -------------------
 async def handle_close(interaction: discord.Interaction):
     channel = interaction.channel
     if channel is None:
         await interaction.response.send_message("This must be used inside a ticket channel.", ephemeral=True)
         return
-
-    # validate ticket channel
     if not (channel.name.startswith("ticket-") or (channel.topic and "Ticket for" in channel.topic)):
         await interaction.response.send_message("This doesn't appear to be a ticket channel.", ephemeral=True)
         return
-
-    # only admins allowed (double-check)
     if not is_admin(interaction.user):
         await interaction.response.send_message("Only administrators can close tickets.", ephemeral=True)
         return
 
     cfg = load_config()
 
-    # announce deletion countdown
     try:
         await interaction.response.send_message("Deleting the ticket in a few seconds...", ephemeral=False)
     except Exception:
@@ -281,10 +268,8 @@ async def handle_close(interaction: discord.Interaction):
         except Exception:
             pass
 
-    # short wait
     await asyncio.sleep(4)
 
-    # collect transcript
     lines = []
     try:
         async for msg in channel.history(limit=None, oldest_first=True):
@@ -300,17 +285,15 @@ async def handle_close(interaction: discord.Interaction):
     transcript_text = "\n".join(lines) if lines else "No messages found."
     transcript_bytes = transcript_text.encode("utf-8")
 
-    # extract ticket owner id from topic if present
     ticket_owner_id = None
     if channel.topic:
         try:
             if "ID:" in channel.topic:
-                after = channel.topic.split("ID:")[1]
-                ticket_owner_id = int(after.split(")")[0].strip())
+                ticket_owner_id = int(channel.topic.split("ID:")[1].split(")")[0].strip())
         except Exception:
             ticket_owner_id = None
 
-    # log deletion to log channel
+    # send logs
     log_ch = None
     if cfg.get("log_channel_id"):
         log_ch = channel.guild.get_channel(cfg["log_channel_id"])
@@ -321,12 +304,11 @@ async def handle_close(interaction: discord.Interaction):
             del_embed.add_field(name="Ticket Owner ID", value=str(ticket_owner_id), inline=False)
         try:
             await log_ch.send(embed=del_embed)
-            # send transcript file
             await log_ch.send(file=File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt"))
         except Exception:
             pass
 
-    # DM transcript to ticket owner
+    # DM owner
     if ticket_owner_id:
         try:
             user = await bot.fetch_user(ticket_owner_id)
@@ -335,7 +317,6 @@ async def handle_close(interaction: discord.Interaction):
         except Exception:
             pass
 
-    # finally delete channel
     try:
         await channel.delete(reason=f"Ticket closed by {interaction.user}")
     except Exception:
@@ -344,7 +325,7 @@ async def handle_close(interaction: discord.Interaction):
         except Exception:
             pass
 
-# ---------- Auto-close background checker ----------
+# ------------------- Auto-close background task -------------------
 async def auto_close_checker():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -359,60 +340,57 @@ async def auto_close_checker():
                             last_msg = None
                             async for msg in channel.history(limit=1, oldest_first=False):
                                 last_msg = msg
-                            if last_msg:
-                                # compare times (naive UTC)
-                                if last_msg.created_at.replace(tzinfo=None) < cutoff:
-                                    try:
-                                        await channel.send("🕐 No activity detected for a while. Deleting the ticket in a few seconds...")
-                                        await asyncio.sleep(5)
-                                        # gather transcript
-                                        lines = []
-                                        async for msg in channel.history(limit=None, oldest_first=True):
-                                            ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                                            author = f"{msg.author} ({msg.author.id})"
-                                            content = msg.content or ""
-                                            attachments = " ".join(a.url for a in msg.attachments) if msg.attachments else ""
-                                            line = f"[{ts}] {author}: {content} {attachments}"
-                                            lines.append(line)
-                                        transcript_text = "\n".join(lines) if lines else "No messages found."
-                                        transcript_bytes = transcript_text.encode("utf-8")
-                                        # log
-                                        log_ch = None
-                                        if cfg.get("log_channel_id"):
-                                            log_ch = guild.get_channel(cfg["log_channel_id"])
-                                        if isinstance(log_ch, discord.TextChannel):
-                                            del_embed = Embed(title="Ticket Auto-Closed (Inactivity)", color=discord.Color.orange(), timestamp=datetime.datetime.utcnow())
-                                            del_embed.add_field(name="Channel", value=channel.name, inline=False)
-                                            try:
-                                                await log_ch.send(embed=del_embed)
-                                                await log_ch.send(file=File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt"))
-                                            except Exception:
-                                                pass
-                                        # DM owner if possible
-                                        ticket_owner_id = None
-                                        if channel.topic and "ID:" in channel.topic:
-                                            try:
-                                                ticket_owner_id = int(channel.topic.split("ID:")[1].split(")")[0].strip())
-                                            except Exception:
-                                                ticket_owner_id = None
-                                        if ticket_owner_id:
-                                            try:
-                                                user = await bot.fetch_user(ticket_owner_id)
-                                                if user:
-                                                    await user.send(content=f"Your ticket **{channel.name}** has been auto-closed due to inactivity. Transcript attached.", file=File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt"))
-                                            except Exception:
-                                                pass
-                                        # delete
-                                        await channel.delete(reason="Auto-closed due to inactivity")
-                                    except Exception as e:
-                                        print(f"Auto-close error for {channel.name}: {e}")
+                            if last_msg and last_msg.created_at.replace(tzinfo=None) < cutoff:
+                                try:
+                                    await channel.send("🕐 No activity detected for a while. Deleting the ticket in a few seconds...")
+                                    await asyncio.sleep(5)
+                                    # build transcript
+                                    lines = []
+                                    async for msg in channel.history(limit=None, oldest_first=True):
+                                        ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                                        author = f"{msg.author} ({msg.author.id})"
+                                        content = msg.content or ""
+                                        attachments = " ".join(a.url for a in msg.attachments) if msg.attachments else ""
+                                        lines.append(f"[{ts}] {author}: {content} {attachments}")
+                                    transcript_text = "\n".join(lines) if lines else "No messages found."
+                                    transcript_bytes = transcript_text.encode("utf-8")
+                                    # log
+                                    log_ch = None
+                                    if cfg.get("log_channel_id"):
+                                        log_ch = guild.get_channel(cfg["log_channel_id"])
+                                    if isinstance(log_ch, discord.TextChannel):
+                                        del_embed = Embed(title="Ticket Auto-Closed (Inactivity)", color=discord.Color.orange(), timestamp=datetime.datetime.utcnow())
+                                        del_embed.add_field(name="Channel", value=channel.name, inline=False)
+                                        try:
+                                            await log_ch.send(embed=del_embed)
+                                            await log_ch.send(file=File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt"))
+                                        except Exception:
+                                            pass
+                                    # DM owner
+                                    ticket_owner_id = None
+                                    if channel.topic and "ID:" in channel.topic:
+                                        try:
+                                            ticket_owner_id = int(channel.topic.split("ID:")[1].split(")")[0].strip())
+                                        except Exception:
+                                            ticket_owner_id = None
+                                    if ticket_owner_id:
+                                        try:
+                                            user = await bot.fetch_user(ticket_owner_id)
+                                            if user:
+                                                await user.send(content=f"Your ticket **{channel.name}** has been auto-closed due to inactivity. Transcript attached.", file=File(io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt"))
+                                        except Exception:
+                                            pass
+                                    # delete
+                                    await channel.delete(reason="Auto-closed due to inactivity")
+                                except Exception as e:
+                                    print(f"Auto-close error for {channel.name}: {e}")
                         except Exception as e:
                             print(f"Auto-close check error in {channel.name}: {e}")
         await asyncio.sleep(300)  # check every 5 minutes
 
-# ---------- Modal classes for config inputs (use ui.TextInput for compatibility) ----------
+# ------------------- Modal classes (use ui.TextInput) -------------------
 class SimpleModal(Modal):
-    def __init__(self, title: str, label: str, placeholder: str = "", style: discord.TextStyle = discord.TextStyle.short, custom_id: str = "simple_modal"):
+    def __init__(self, title: str, label: str, placeholder: str = "", style=discord.TextStyle.short, custom_id: str = "simple_modal"):
         super().__init__(title=title, custom_id=custom_id)
         self.input = ui.TextInput(label=label, placeholder=placeholder, style=style, required=True)
         self.add_item(self.input)
@@ -420,7 +398,7 @@ class SimpleModal(Modal):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("Saved.", ephemeral=True)
 
-# Subclasses:
+# Specific modals:
 class TitleModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Title", label="Panel title", placeholder="Maxy Does Tickets – Support System", custom_id="title_modal")
@@ -468,8 +446,7 @@ class CategoryModal(SimpleModal):
         except Exception: await interaction.response.send_message("Category ID must be numeric.", ephemeral=True); return
         cat = interaction.guild.get_channel(cid)
         if not cat or not isinstance(cat, discord.CategoryChannel): await interaction.response.send_message("Category not found.", ephemeral=True); return
-        cfg = load_config(); cfg["category_id"] = cid; save_config(cfg)
-        await interaction.response.send_message(f"Ticket category set to: {cat.name}", ephemeral=True)
+        cfg = load_config(); cfg["category_id"] = cid; save_config(cfg); await interaction.response.send_message(f"Ticket category set to: {cat.name}", ephemeral=True)
 
 class LogChannelModal(SimpleModal):
     def __init__(self):
@@ -523,12 +500,11 @@ class AutocloseModal(SimpleModal):
         if hours == 0: await interaction.response.send_message("Auto-close disabled.", ephemeral=True)
         else: await interaction.response.send_message(f"Auto-close set to {hours} hours.", ephemeral=True)
 
-# ---------- Ticket Setup view (buttons) ----------
+# ------------------- Ticket setup view (buttons) -------------------
 class TicketSetupView(View):
-    def __init__(self, timeout: Optional[float] = None):
-        super().__init__(timeout=timeout)
-        # Add buttons with custom_ids
-        btns = [
+    def __init__(self):
+        super().__init__(timeout=None)
+        ui_buttons = [
             ("Set Panel Title", "btn_title", discord.ButtonStyle.primary),
             ("Set Panel Description", "btn_desc", discord.ButtonStyle.primary),
             ("Set Panel Image", "btn_image", discord.ButtonStyle.primary),
@@ -541,9 +517,9 @@ class TicketSetupView(View):
             ("Preview Panel", "btn_preview", discord.ButtonStyle.success),
             ("Send Panel Here", "btn_send_panel", discord.ButtonStyle.success)
         ]
-        for label, cid, style in btns:
-            b = Button(label=label, custom_id=cid, style=style)
-            self.add_item(b)
+        for label, cid, style in ui_buttons:
+            btn = Button(label=label, custom_id=cid, style=style)
+            self.add_item(btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not is_admin(interaction.user):
@@ -551,17 +527,16 @@ class TicketSetupView(View):
             return False
         return True
 
-# Centralized handling of TicketSetupView buttons
+# ------------------- Central interaction handler for setup buttons -------------------
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    # handle component interactions for our setup buttons
     try:
         if interaction.type == discord.InteractionType.component and interaction.data and "custom_id" in interaction.data:
             cid = interaction.data["custom_id"]
             if cid.startswith("btn_"):
                 if not is_admin(interaction.user):
                     await interaction.response.send_message("Admins only.", ephemeral=True); return
-                # map to modal/actions
+                # map ids to modals / actions
                 if cid == "btn_title": await interaction.response.send_modal(TitleModal()); return
                 if cid == "btn_desc": await interaction.response.send_modal(DescModal()); return
                 if cid == "btn_image": await interaction.response.send_modal(ImageModal()); return
@@ -595,13 +570,11 @@ async def on_interaction(interaction: discord.Interaction):
                     except Exception as e:
                         await interaction.response.send_message(f"Failed to send panel: {e}", ephemeral=True)
                     return
-    except Exception:
-        # If not our component or failure, ignore and allow other handlers
-        pass
-    # For other interactions, let Pycord handle as usual (no blocking)
-    # Note: returning without calling bot._run_component_listeners is fine in many setups.
+    except Exception as e:
+        print("on_interaction handler error:", e)
+    # let Pycord handle other interactions
 
-# ---------- Slash command: /ticket setup (shows button menu) ----------
+# ------------------- Slash commands -------------------
 ticket_group = bot.create_group("ticket", "Ticket related commands")
 
 @ticket_group.command(name="setup", description="Open ticket setup menu (buttons). Admins only.")
@@ -611,7 +584,6 @@ async def ticket_setup(ctx: discord.ApplicationContext):
     view = TicketSetupView()
     await ctx.respond("Ticket setup — use the buttons to configure the panel. Each button will prompt for input.", view=view, ephemeral=True)
 
-# ---------- Slash command: /settings (show all current settings) ----------
 @bot.slash_command(name="settings", description="Show current ticket config (admins only).")
 async def settings(ctx: discord.ApplicationContext):
     if not is_admin(ctx.author):
@@ -620,8 +592,7 @@ async def settings(ctx: discord.ApplicationContext):
     embed = Embed(title="Ticket Config", color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Title", value=cfg.get("title") or "—", inline=False)
     desc = cfg.get("description") or "—"
-    if len(desc) > 1000:
-        desc = desc[:1000] + "..."
+    if len(desc) > 1000: desc = desc[:1000] + "..."
     embed.add_field(name="Description", value=desc, inline=False)
     embed.add_field(name="Image", value=cfg.get("image") or "—", inline=False)
     embed.add_field(name="Buttons", value=", ".join(cfg.get("buttons", [])) or "—", inline=False)
@@ -644,7 +615,7 @@ async def settings(ctx: discord.ApplicationContext):
     embed.add_field(name="Auto-close (hours)", value=str(cfg.get("autoclose_hours", 0)), inline=False)
     await ctx.respond(embed=embed, ephemeral=True)
 
-# ---------- Legacy convenience commands (still available) ----------
+# convenience / legacy commands kept (optional)
 @bot.slash_command(name="setup_ticket", description="(legacy) send ticket panel to channel (admins only).")
 async def setup_ticket(ctx: discord.ApplicationContext):
     if not is_admin(ctx.author):
@@ -664,93 +635,26 @@ async def setup_ticket(ctx: discord.ApplicationContext):
     except Exception as e:
         await ctx.respond(f"Failed to send panel: {e}", ephemeral=True)
 
-# Convenience setters (unchanged; kept for direct command usage)
-@bot.slash_command(name="set_ticket_title", description="Set the ticket embed title (admins only).")
-async def set_ticket_title(ctx: discord.ApplicationContext, title: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["title"] = title; save_config(cfg); await ctx.respond("Ticket title updated.", ephemeral=True)
+@bot.slash_command(name="close_ticket", description="Close the ticket (admins only).")
+async def close_ticket(ctx: discord.ApplicationContext):
+    if not is_admin(ctx.author):
+        await ctx.respond("Admins only.", ephemeral=True); return
+    await handle_close(ctx.interaction)
 
-@bot.slash_command(name="set_ticket_desc", description="Set the ticket embed description (admins only).")
-async def set_ticket_desc(ctx: discord.ApplicationContext, description: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["description"] = description; save_config(cfg); await ctx.respond("Ticket description updated.", ephemeral=True)
-
-@bot.slash_command(name="set_ticket_image", description="Set the ticket embed image URL (admins only).")
-async def set_ticket_image(ctx: discord.ApplicationContext, url: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    if not (url.startswith("http://") or url.startswith("https://")): await ctx.respond("Provide a valid http/https URL.", ephemeral=True); return
-    cfg = load_config(); cfg["image"] = url; save_config(cfg); await ctx.respond("Ticket image updated.", ephemeral=True)
-
-@bot.slash_command(name="set_ticket_buttons", description="Set the ticket button labels (comma separated) (admins only).")
-async def set_ticket_buttons(ctx: discord.ApplicationContext, buttons: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    labels = [b.strip() for b in buttons.split(",") if b.strip()]
-    if not labels: await ctx.respond("Provide at least one label.", ephemeral=True); return
-    cfg = load_config(); cfg["buttons"] = labels; save_config(cfg); await ctx.respond(f"Ticket buttons updated: {', '.join(labels)}", ephemeral=True)
-
-@bot.slash_command(name="set_close_text", description="(legacy) Set the text sent when ticket is made (admins only).")
-async def set_close_text(ctx: discord.ApplicationContext, text: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config(); cfg["creation_text"] = text; save_config(cfg); await ctx.respond("Text updated.", ephemeral=True)
-
-@bot.slash_command(name="set_notify_role", description="Set a role to ping when a ticket is created (mention or ID). Use 0 to disable. (admins only)")
-async def set_notify_role(ctx: discord.ApplicationContext, role: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config()
-    if role.strip() == "0": cfg["notify_role_id"] = None; save_config(cfg); await ctx.respond("Notify role disabled.", ephemeral=True); return
-    role_id = None
-    if role.isdigit(): role_id = int(role)
-    else:
-        if role.startswith("<@&") and role.endswith(">"):
-            try: role_id = int(role[3:-1])
-            except Exception: role_id = None
-    if role_id is None: await ctx.respond("Could not parse role. Provide mention or ID or 0 to disable.", ephemeral=True); return
-    r = ctx.guild.get_role(role_id)
-    if not r: await ctx.respond("Role not found.", ephemeral=True); return
-    cfg["notify_role_id"] = role_id; save_config(cfg); await ctx.respond(f"Notify role set to: {r.name}", ephemeral=True)
-
-@bot.slash_command(name="set_log_channel", description="Set the log channel ID where ticket logs/transcripts will be sent. Use 0 to disable. (admins only)")
-async def set_log_channel(ctx: discord.ApplicationContext, channel_id: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    cfg = load_config()
-    if channel_id.strip() == "0": cfg["log_channel_id"] = None; save_config(cfg); await ctx.respond("Log channel disabled.", ephemeral=True); return
-    try: cid = int(channel_id)
-    except Exception: await ctx.respond("Channel ID must be numeric.", ephemeral=True); return
-    ch = ctx.guild.get_channel(cid)
-    if not ch or not isinstance(ch, discord.TextChannel): await ctx.respond("Text channel not found in this server.", ephemeral=True); return
-    cfg["log_channel_id"] = cid; save_config(cfg); await ctx.respond(f"Log channel set to: {ch.mention}", ephemeral=True)
-
-@bot.slash_command(name="set_ticket_category", description="Set the category ID where tickets are created (admins only).")
-async def set_ticket_category(ctx: discord.ApplicationContext, category_id: str):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    try: cid = int(category_id)
-    except Exception: await ctx.respond("Category ID must be numeric.", ephemeral=True); return
-    cat = ctx.guild.get_channel(cid)
-    if not cat or not isinstance(cat, discord.CategoryChannel): await ctx.respond("Category not found.", ephemeral=True); return
-    cfg = load_config(); cfg["category_id"] = cid; save_config(cfg); await ctx.respond(f"Ticket category set to: {cat.name}", ephemeral=True)
-
-@bot.slash_command(name="set_autoclose", description="Set hours before inactive tickets auto-close (0 to disable). Admins only.")
-async def set_autoclose(ctx: discord.ApplicationContext, hours: int):
-    if not is_admin(ctx.author): await ctx.respond("Admins only.", ephemeral=True); return
-    if hours < 0: await ctx.respond("Hours cannot be negative.", ephemeral=True); return
-    cfg = load_config(); cfg["autoclose_hours"] = hours; save_config(cfg)
-    if hours == 0: await ctx.respond("Auto-close disabled.", ephemeral=True)
-    else: await ctx.respond(f"Tickets will auto-close after {hours} hours of inactivity.", ephemeral=True)
-
-# ---------- Bot Events ----------
+# ------------------- Bot events -------------------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print("Bot ready. Use /ticket setup to open the config menu, or /setup_ticket to post the panel.")
-    # start background autoclose checker
     bot.loop.create_task(auto_close_checker())
 
-# ---------- Run ----------
+# ------------------- Run -------------------
 if __name__ == "__main__":
-    TOKEN = os.getenv("DISCORD_TOKEN")
+    TOKEN = os.environ.get("DISCORD_TOKEN")
     if not TOKEN:
-        raise ValueError("❌ No DISCORD_TOKEN found in environment. Put DISCORD_TOKEN in your .env or Render env vars.")
+        raise RuntimeError("❌ DISCORD_TOKEN not found. Set it in Render env vars or local .env.")
     try:
+        # use asyncio.run to be safe on hosting envs
         asyncio.run(bot.start(TOKEN))
     except KeyboardInterrupt:
         print("🛑 Bot stopped manually.")
