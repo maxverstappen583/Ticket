@@ -1,35 +1,37 @@
-# main.py - Maxy Does Tickets (final, Render-ready)
-# ------------------------------------------------
-# - Flask keep-alive for Render Web Service
-# - audioop disable for Pycord on Python 3.13+
-# - Uses ui.TextInput + discord.enums.TextStyle for compatibility
-# - Full ticket system (button-driven setup UI, /settings, autoclose, transcripts)
-# ------------------------------------------------
+# main.py - Maxy Does Tickets (Render-ready, compatibility-safe)
+# -------------------------------------------------------------
+# - Flask keep-alive for Render web service
+# - audioop disable BEFORE importing discord
+# - safe handling for TextInput / TextStyle differences across py-cord installs
+# - full ticket system: /ticket setup (button UI), /settings, autoclose, transcripts, notify role, log channel
+# - admin-only close, 1 ticket per user
+# -------------------------------------------------------------
 
-# ------------------- Keep-alive (Flask) -------------------
+# -------------------- Keep-alive (Flask) --------------------
 from threading import Thread
 from flask import Flask
 import os
 
-app = Flask('')
+app = Flask("maxy_ticket_bot")
 
-@app.route('/')
+@app.route("/")
 def home():
     return "✅ Maxy Ticket Bot is running."
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    # disable Flask reloader in hosting environments
+    # No reloader in production
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 Thread(target=run_web).start()
-# ---------------------------------------------------------
+# -----------------------------------------------------------
 
-# ------------------- audioop fix (must run BEFORE discord import) -------------------
+# ---------------- audioop fix (must run BEFORE discord import) ----------------
+# Prevents voice/audio imports on some hosts (Render, etc.)
 os.environ["DISCORD_DISABLE_VOICE"] = "1"
-# -----------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-# Standard imports
+# ----------- Standard imports & dotenv ----------
 import json
 import io
 import asyncio
@@ -37,19 +39,31 @@ import datetime
 from datetime import timedelta
 from typing import List, Optional
 from dotenv import load_dotenv
-load_dotenv()  # local testing: reads .env; Render uses environment variables
+load_dotenv()  # local .env support for testing
+# ------------------------------------------------
 
-# Discord / Pycord imports
+# ---------------- Discord / Pycord imports (compat-safe) ----------------
 import discord
 from discord import Embed, File
 from discord.ui import View, Button, Modal
-from discord import ui  # use ui.TextInput for compatibility
-from discord.enums import TextStyle  # TextStyle location for py-cord 2.6.1+
+from discord import ui  # will use ui.TextInput
+# Do NOT assume where TextStyle lives — try common locations
+TextStyle = None
+try:
+    # preferred: discord.TextStyle (some builds)
+    TextStyle = getattr(discord, "TextStyle", None)
+except Exception:
+    TextStyle = None
+# fallback to ui.TextStyle if exists
+if TextStyle is None:
+    TextStyle = getattr(ui, "TextStyle", None)
 
-# debug version print
+# Log versions / where TextStyle was found
 print("✅ Pycord / discord version:", getattr(discord, "__version__", "unknown"))
+print("ℹ️ TextStyle resolved from:", "discord" if getattr(discord, "TextStyle", None) else ("discord.ui" if getattr(ui, "TextStyle", None) else "NOT_FOUND"))
+# -------------------------------------------------------------------------
 
-# ------------------- Config / Persistence -------------------
+# ---------------- Config / persistence ----------------
 CONFIG_FILE = "ticket_config.json"
 DEFAULT_CONFIG = {
     "title": "Maxy Does Tickets – Support System",
@@ -59,7 +73,7 @@ DEFAULT_CONFIG = {
     "category_id": None,
     "panel_message_id": None,
     "panel_channel_id": None,
-    "creation_text": "please wait until one of our staffs assist u.",  # text shown when ticket is created
+    "creation_text": "please wait until one of our staffs assist u.",
     "notify_role_id": None,
     "log_channel_id": None,
     "autoclose_hours": 0  # 0 = disabled
@@ -84,10 +98,11 @@ def save_config(cfg: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
-# load config initially
+# load initial config (handlers reload when needed)
 config = load_config()
+# ------------------------------------------------------
 
-# ------------------- Intents & Bot -------------------
+# ---------------- Intents & Bot (safe fallback) --------------
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -97,20 +112,22 @@ intents.guilds = True
 try:
     bot = discord.Bot(intents=intents)
 except discord.PrivilegedIntentsRequired:
-    # fallback to limited mode if portal not configured: still runs
+    # If portal not configured, run limited mode
     intents.members = False
     intents.presences = False
     bot = discord.Bot(intents=intents)
     print("⚠️ Privileged intents not enabled in Developer Portal — running limited mode (members/presences disabled).")
+# -----------------------------------------------------------
 
-# ------------------- Utility -------------------
+# ---------------- Utility ----------------
 def is_admin(user: discord.Member) -> bool:
     try:
         return user.guild_permissions.administrator
     except Exception:
         return False
+# -----------------------------------------
 
-# ------------------- Views & Buttons -------------------
+# ---------------- Views & Buttons ----------------
 class TicketButton(Button):
     def __init__(self, label: str, style: discord.ButtonStyle = discord.ButtonStyle.primary):
         super().__init__(label=label, style=style)
@@ -144,15 +161,16 @@ def make_close_view() -> View:
     v = View(timeout=None)
     v.add_item(CloseTicketButton())
     return v
+# --------------------------------------------------
 
-# ------------------- Ticket creation -------------------
+# ---------------- Ticket creation handler ----------------
 async def handle_ticket_button(interaction: discord.Interaction, issue_type: str):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
     member = interaction.user
     cfg = load_config()
 
-    # One-ticket-per-user: check existing channels with user's ID in topic
+    # one ticket per person
     for ch in guild.text_channels:
         if ch.topic and str(member.id) in ch.topic:
             try:
@@ -161,7 +179,7 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
                 pass
             return
 
-    # create channel name (unique)
+    # channel name creation
     safe_name = member.name.lower().replace(" ", "-")[:50]
     base_name = f"ticket-{safe_name}"
     channel_name = base_name
@@ -170,14 +188,13 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
         counter += 1
         channel_name = f"{base_name}-{counter}"
 
-    # category if set
+    # category handling
     category = None
     if cfg.get("category_id"):
         category = guild.get_channel(cfg["category_id"])
         if category is None or not isinstance(category, discord.CategoryChannel):
             category = None
 
-    # permission overwrites
     overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
     overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
     for role in guild.roles:
@@ -187,7 +204,6 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
         except Exception:
             pass
 
-    # create channel
     try:
         created = await guild.create_text_channel(
             name=channel_name,
@@ -221,7 +237,7 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
     except Exception:
         pass
 
-    # ping notify role if set
+    # notify role ping
     if cfg.get("notify_role_id"):
         role = guild.get_role(cfg["notify_role_id"])
         if role:
@@ -230,7 +246,7 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
             except Exception:
                 pass
 
-    # log creation
+    # log to log channel
     log_ch = None
     if cfg.get("log_channel_id"):
         log_ch = guild.get_channel(cfg["log_channel_id"])
@@ -245,8 +261,9 @@ async def handle_ticket_button(interaction: discord.Interaction, issue_type: str
             pass
 
     await interaction.followup.send(f"Your ticket has been created: {created.mention}", ephemeral=True)
+# ----------------------------------------------------------
 
-# ------------------- Close handler & transcript -------------------
+# ---------------- Close & transcript handler ----------------
 async def handle_close(interaction: discord.Interaction):
     channel = interaction.channel
     if channel is None:
@@ -271,7 +288,7 @@ async def handle_close(interaction: discord.Interaction):
 
     await asyncio.sleep(4)
 
-    lines = []
+    lines: List[str] = []
     try:
         async for msg in channel.history(limit=None, oldest_first=True):
             ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -293,7 +310,7 @@ async def handle_close(interaction: discord.Interaction):
         except Exception:
             ticket_owner_id = None
 
-    # log deletion and transcript
+    # send to log channel
     log_ch = None
     if cfg.get("log_channel_id"):
         log_ch = channel.guild.get_channel(cfg["log_channel_id"])
@@ -324,8 +341,9 @@ async def handle_close(interaction: discord.Interaction):
             await interaction.followup.send("Failed to delete the ticket channel; please remove it manually.", ephemeral=True)
         except Exception:
             pass
+# ---------------------------------------------------------------
 
-# ------------------- Auto-close background task -------------------
+# ---------------- Auto-close background checker ----------------
 async def auto_close_checker():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -344,7 +362,7 @@ async def auto_close_checker():
                                 try:
                                     await channel.send("🕐 No activity detected for a while. Deleting the ticket in a few seconds...")
                                     await asyncio.sleep(5)
-                                    # gather transcript
+                                    # build transcript
                                     lines = []
                                     async for msg in channel.history(limit=None, oldest_first=True):
                                         ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -387,13 +405,17 @@ async def auto_close_checker():
                         except Exception as e:
                             print(f"Auto-close check error in {channel.name}: {e}")
         await asyncio.sleep(300)  # check every 5 minutes
+# ------------------------------------------------------------------------
 
-# ------------------- Modal classes (use ui.TextInput + TextStyle) -------------------
+# ---------------- Modal classes (ui.TextInput, TextStyle safe) ----------------
+# We will pass 'style' to ui.TextInput only when TextStyle resolved, else omit (defaults to short)
 class SimpleModal(Modal):
-    def __init__(self, title: str, label: str, placeholder: str = "", style=TextStyle.short, custom_id: str = "simple_modal"):
+    def __init__(self, title: str, label: str, placeholder: str = "", style=None, custom_id: str = "simple_modal"):
         super().__init__(title=title, custom_id=custom_id)
-        # ui.TextInput is used for compatibility across py-cord installs
-        self.input = ui.TextInput(label=label, placeholder=placeholder, style=style, required=True)
+        if style is not None and TextStyle is not None:
+            self.input = ui.TextInput(label=label, placeholder=placeholder, style=style, required=True)
+        else:
+            self.input = ui.TextInput(label=label, placeholder=placeholder, required=True)
         self.add_item(self.input)
 
     async def callback(self, interaction: discord.Interaction):
@@ -404,13 +426,15 @@ class TitleModal(SimpleModal):
     def __init__(self):
         super().__init__(title="Set Panel Title", label="Panel title", placeholder="Maxy Does Tickets – Support System", custom_id="title_modal")
     async def callback(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("Admins only.", ephemeral=True); return
         cfg = load_config(); cfg["title"] = self.input.value; save_config(cfg)
         await interaction.response.send_message("Panel title updated.", ephemeral=True)
 
 class DescModal(SimpleModal):
     def __init__(self):
-        super().__init__(title="Set Panel Description", label="Panel description", placeholder="Need help? Open a ticket...", style=TextStyle.paragraph, custom_id="desc_modal")
+        style = TextStyle.paragraph if TextStyle is not None else None
+        super().__init__(title="Set Panel Description", label="Panel description", placeholder="Need help? Open a ticket...", style=style, custom_id="desc_modal")
     async def callback(self, interaction: discord.Interaction):
         if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         cfg = load_config(); cfg["description"] = self.input.value; save_config(cfg)
@@ -433,8 +457,7 @@ class ButtonsModal(SimpleModal):
     async def callback(self, interaction: discord.Interaction):
         if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         labels = [b.strip() for b in self.input.value.split(",") if b.strip()]
-        if not labels:
-            await interaction.response.send_message("Provide at least one button label.", ephemeral=True); return
+        if not labels: await interaction.response.send_message("Provide at least one button label.", ephemeral=True); return
         cfg = load_config(); cfg["buttons"] = labels; save_config(cfg)
         await interaction.response.send_message(f"Panel buttons updated: {', '.join(labels)}", ephemeral=True)
 
@@ -484,7 +507,8 @@ class NotifyRoleModal(SimpleModal):
 
 class CreationTextModal(SimpleModal):
     def __init__(self):
-        super().__init__(title="Set Text Sent When Ticket Is Made", label="Text shown when ticket created", style=TextStyle.paragraph, custom_id="creation_text_modal")
+        style = TextStyle.paragraph if TextStyle is not None else None
+        super().__init__(title="Set Text Sent When Ticket Is Made", label="Text shown when ticket created", style=style, custom_id="creation_text_modal")
     async def callback(self, interaction: discord.Interaction):
         if not is_admin(interaction.user): await interaction.response.send_message("Admins only.", ephemeral=True); return
         cfg = load_config(); cfg["creation_text"] = self.input.value; save_config(cfg); await interaction.response.send_message("Text updated.", ephemeral=True)
@@ -500,8 +524,9 @@ class AutocloseModal(SimpleModal):
         cfg = load_config(); cfg["autoclose_hours"] = hours; save_config(cfg)
         if hours == 0: await interaction.response.send_message("Auto-close disabled.", ephemeral=True)
         else: await interaction.response.send_message(f"Auto-close set to {hours} hours.", ephemeral=True)
+# -------------------------------------------------------------------------------
 
-# ------------------- Ticket setup view (buttons) -------------------
+# ---------------- Ticket setup view (button menu) ----------------
 class TicketSetupView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -527,8 +552,9 @@ class TicketSetupView(View):
             await interaction.response.send_message("Admins only.", ephemeral=True)
             return False
         return True
+# ------------------------------------------------------------------
 
-# ------------------- Central interaction handler for setup buttons -------------------
+# ---------------- Central interaction handler for setup buttons ----------------
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
@@ -537,7 +563,7 @@ async def on_interaction(interaction: discord.Interaction):
             if cid.startswith("btn_"):
                 if not is_admin(interaction.user):
                     await interaction.response.send_message("Admins only.", ephemeral=True); return
-                # map ids to modals/actions
+                # map to modal/actions
                 if cid == "btn_title": await interaction.response.send_modal(TitleModal()); return
                 if cid == "btn_desc": await interaction.response.send_modal(DescModal()); return
                 if cid == "btn_image": await interaction.response.send_modal(ImageModal()); return
@@ -573,9 +599,10 @@ async def on_interaction(interaction: discord.Interaction):
                     return
     except Exception as e:
         print("on_interaction handler error:", e)
-    # allow other interactions to be handled by pycord normally
+    # allow other interactions to be processed by Pycord
+# --------------------------------------------------------------------------------
 
-# ------------------- Slash commands -------------------
+# ---------------- Slash commands ----------------
 ticket_group = bot.create_group("ticket", "Ticket related commands")
 
 @ticket_group.command(name="setup", description="Open ticket setup menu (buttons). Admins only.")
@@ -616,7 +643,7 @@ async def settings(ctx: discord.ApplicationContext):
     embed.add_field(name="Auto-close (hours)", value=str(cfg.get("autoclose_hours", 0)), inline=False)
     await ctx.respond(embed=embed, ephemeral=True)
 
-# convenience / legacy commands still available
+# convenience legacy commands (kept)
 @bot.slash_command(name="setup_ticket", description="(legacy) send ticket panel to this channel (admins only).")
 async def setup_ticket(ctx: discord.ApplicationContext):
     if not is_admin(ctx.author):
@@ -641,21 +668,25 @@ async def close_ticket(ctx: discord.ApplicationContext):
     if not is_admin(ctx.author):
         await ctx.respond("Admins only.", ephemeral=True); return
     await handle_close(ctx.interaction)
+# ----------------------------------------------------
 
-# ------------------- Bot events -------------------
+# ---------------- Bot events ----------------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     print("Bot ready. Use /ticket setup to open the config menu, or /setup_ticket to post the panel.")
-    # start background autoclose checker once
+    # start autoclose task
     bot.loop.create_task(auto_close_checker())
+# -----------------------------------------------
 
-# ------------------- Run -------------------
+# ---------------- Run ----------------
 if __name__ == "__main__":
     TOKEN = os.environ.get("DISCORD_TOKEN")
     if not TOKEN:
         raise RuntimeError("❌ DISCORD_TOKEN not found. Set it in Render env vars or local .env for testing.")
     try:
-        asyncio.run(bot.start(TOKEN))
+        # run via bot.run to work with event loop on Render
+        bot.run(TOKEN)
     except KeyboardInterrupt:
         print("🛑 Bot stopped manually.")
+# ---------------------------------------
